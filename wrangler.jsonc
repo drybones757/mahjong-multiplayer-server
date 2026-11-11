@@ -1,0 +1,7 @@
+{
+  "name": "mahjong-multiplayer",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {"bindings": [{"name": "ROOMS", "class_name": "MahjongRooms"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["MahjongRooms"]}]
+}
