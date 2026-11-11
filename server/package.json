@@ -1,0 +1,1 @@
+{"name":"custom-faan-mahjong-rooms","version":"2.2.0","private":true,"description":"Authoritative private-room server for Custom Faan Mahjong. No third-party dependencies.","type":"commonjs","engines":{"node":">=20"},"scripts":{"start":"node server.js","test":"node test-server.js"}}
