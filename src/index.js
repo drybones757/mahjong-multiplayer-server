@@ -14,10 +14,10 @@ const randomCode = () => Array.from({length:6}, () => codeChars[randomInt(codeCh
 const randomToken = () => randomHex(24);
 const fairRandom = () => randomInt(0x1000000)/0x1000000;
 const now = () => Date.now();
-// Every discard gets the same claim window, regardless of hidden claim eligibility.
-// The host can pick one of these timings, but the schedule never depends on who can claim.
-const CLAIM_WINDOWS=[2500,4000,6000];
-const normalizeClaimMs=v=>CLAIM_WINDOWS.includes(Number(v))?Number(v):4000;
+// Custom claim windows: 1–60 seconds, in 0.5 second increments.
+// Everyone sees the same maximum window irrespective of claim eligibility.
+const normalizeClaimMs=v=>Number.isFinite(Number(v))
+  ? Math.min(60000,Math.max(1000,Math.round(Number(v)/500)*500)):4000;
 function err(ws, code, message) { send(ws, {type:'error', code, message}); }
 function isHost(room, participant) { return room.host === participant?.token; }
 function validName(name) { return String(name||'Player').trim().slice(0,22).replace(/[<>\x00-\x1f]/g,'') || 'Player'; }
@@ -86,9 +86,10 @@ function prepareClaim(room){
    const automatic=computed.find(x=>x.p===p)?.claim||null;
    responses.set(p,automatic);
   }else{
-   const o=claimOffers(g,p);
-   if(o&&(o.hu||o.pong||o.kong||o.chows.length))waiting.push(p);
-   else responses.set(p,null);
+   // Every human other than the discarder can explicitly Pass, even if they
+   // have no legal claim. This prevents early resolution from revealing whether
+   // someone was eligible to call. Silence still becomes Pass at the deadline.
+   waiting.push(p);
   }
  }
  const created=now();
@@ -96,12 +97,16 @@ function prepareClaim(room){
 }
 function resolveClaim(room){
  const q=room.claim,g=room.game;
- if(!q||now()<q.deadline)return;
- // Silence counts as Pass. All seats, including ineligible ones, use one fixed timer.
+ if(!q)return false;
+ const allAnswered=q.responses.size===3; // three seats other than the discarder
+ if(now()<q.deadline&&!allAnswered)return false;
+ // Award nothing until the deadline OR all three replies are in. Never use
+ // arrival order to determine priority. Silence at the deadline means Pass.
  for(const p of q.waiting)if(!q.responses.has(p))q.responses.set(p,null);
  g.pending.bots=[...q.responses].filter(([p,c])=>c).map(([p,claim])=>({p,claim}));
  room.claim=null;
- if(g.pending.type==='rob')E.resolveRob(g,null); else E.claim(g,null);
+ if(g.pending.type==='rob')E.resolveRob(g,null);else E.claim(g,null);
+ return true;
 }
 function drive(room){
  const g=room.game;
@@ -114,7 +119,7 @@ function drive(room){
   if(g.phase==='between'||g.phase==='ended')return;
   if(g.phase==='claim'){
    if(!room.claim)prepareClaim(room);
-   if(now()>=room.claim.deadline){resolveClaim(room);continue}
+   if(resolveClaim(room))continue
    return;
   }
   if(g.phase==='discard'){
@@ -158,13 +163,15 @@ function processAction(room,member,msg){
  if(g.phase==='claim'&&room.claim&&room.claim.waiting.includes(p)){
   if(room.claim.responses.has(p))throw Error('Your response has already been recorded.');
   if(now()>=room.claim.deadline)throw Error('The claim window has closed.');
-  if(a!=='claim')throw Error('Choose a claim; otherwise you will pass automatically.');
+  if(a!=='claim')throw Error('Choose Claim or Pass; silence automatically passes at the deadline.');
   const offered=claimOffers(g,p),choice=validChoice(offered,msg.choice);
   if(choice===undefined)throw Error('This claim is not legal.');
   room.claim.responses.set(p,choice);
-  // A private confirmation only. Broadcasting a response immediately can leak
-  // eligibility through websocket traffic timing, even without showing the seat.
-  sync(room,member.ws);return;
+  // The first responder never wins priority. Wait for every seat, or for the
+  // timer. Sending only this seat's confirmation hides other players' choices.
+  if(resolveClaim(room)){drive(room);broadcast(room)}
+  else sync(room,member.ws);
+  return;
  }
  throw Error('It is not your turn.');
 }
@@ -290,6 +297,7 @@ function restore(saved){
    created:x.created,updated:x.updated,game:x.game,claimMs:normalizeClaimMs(x.claimMs),bots:new Set(x.bots||[]),
    claim:x.claim?{...x.claim,responses:new Map(x.claim.responses||[])}:null,members:new Map()};
   for(const m of (x.members||[]))room.members.set(m.token,{...m,ws:null});
+  if(room.claim)room.claim.waiting=[0,1,2,3].filter(p=>p!==room.claim.from&&!room.bots.has(p));
   rooms.set(room.code,room);
  }
 }
@@ -314,7 +322,7 @@ export class MahjongRooms {
  async fetch(request){
   await this.ready;
   const path=new URL(request.url).pathname;
-  if(path==='/'||path==='/health')return Response.json({app:'Custom Faan Mahjong',multiplayer:'ready',rooms:rooms.size,version:'cloudflare-2.3'});
+  if(path==='/'||path==='/health')return Response.json({app:'Custom Faan Mahjong',multiplayer:'ready',rooms:rooms.size,version:'cloudflare-2.5'});
   if(path!=='/ws'||request.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('Not found',{status:404});
   const pair=new WebSocketPair(),client=pair[0],server=pair[1];
   this.ctx.acceptWebSocket(server);
