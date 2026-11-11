@@ -1,0 +1,2 @@
+# mahjong-multiplayer-server
+mahjong
